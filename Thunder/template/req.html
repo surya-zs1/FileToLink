@@ -41,34 +41,15 @@
 
     <link rel="stylesheet"
         href="https://cdn.jsdelivr.net/gh/fyaz05/Resources@main/FileToLink/Obsidian%20Ember/styles.css">
-
+    
     <style>
-        .gesture-indicator {
-            position: absolute;
-            top: 50%;
-            left: 50%;
-            transform: translate(-50%, -50%);
-            background: rgba(0, 0, 0, 0.65);
-            color: white;
-            padding: 20px 25px;
-            border-radius: 16px;
-            display: flex;
-            flex-direction: column;
-            align-items: center;
-            justify-content: center;
-            pointer-events: none;
-            opacity: 0;
-            transition: opacity 0.2s ease;
-            z-index: 9999;
-            backdrop-filter: blur(12px);
-            -webkit-backdrop-filter: blur(12px);
+        /* Ensures the stretched video fills the container when active */
+        media-player.stretched {
+            --media-object-fit: fill;
         }
-        .gesture-indicator.active {
-            opacity: 1;
+        media-player.stretched video {
+            object-fit: fill !important;
         }
-        .gi-icon svg { width: 42px; height: 42px; margin-bottom: 8px; fill: white; }
-        .gi-text { font-family: 'Outfit', sans-serif; font-size: 1.4rem; font-weight: 600; }
-        media-provider { transition: filter 0.05s ease; }
     </style>
 </head>
 
@@ -123,11 +104,6 @@
                     <span class="bg-msg-sub">Use External Player</span>
                 </div>
 
-                <div id="gestureIndicator" class="gesture-indicator">
-                    <div class="gi-icon"></div>
-                    <div class="gi-text">50%</div>
-                </div>
-
                 <media-player id="player" title="{{ file_name }}" playsinline keyTarget="document">
                     <media-provider></media-provider>
                     <media-video-layout></media-video-layout>
@@ -136,13 +112,32 @@
         </section>
 
         <nav class="command-bar">
-            <div class="command-glass">
+            <div class="command-glass" style="flex-wrap: wrap;">
+                
                 <a href="{{ src }}" download="{{ file_name }}" class="cmd-btn primary" id="downloadBtn">
                     <svg viewBox="0 0 24 24">
                         <path d="M19 9h-4V3H9v6H5l7 7 7-7zM5 18v2h14v-2H5z" />
                     </svg>
                     <span>Download</span>
                 </a>
+
+                <div class="cmd-divider"></div>
+
+                <button class="cmd-btn" id="customMuteBtn" aria-label="Toggle Mute">
+                    <svg id="muteIconSvg" viewBox="0 0 24 24">
+                        <path id="muteIconPath" d="M3 9v6h4l5 5V4L7 9H3zm13.5 3c0-1.77-1.02-3.29-2.5-4.03v8.05c1.48-.73 2.5-2.25 2.5-4.02zM14 3.23v2.06c2.89.86 5 3.54 5 6.71s-2.11 5.85-5 6.71v2.06c4.01-.91 7-4.49 7-8.77s-2.99-7.86-7-8.77z"/>
+                    </svg>
+                    <span id="customMuteText">Mute</span>
+                </button>
+
+                <div class="cmd-divider"></div>
+
+                <button class="cmd-btn" id="customAspectBtn" aria-label="Toggle Aspect Ratio">
+                    <svg viewBox="0 0 24 24">
+                        <path d="M7 14H5v5h5v-2H7v-3zm-2-4h2V7h3V5H5v5zm12 7h-3v2h5v-5h-2v3zM14 5v2h3v3h2V5h-5z"/>
+                    </svg>
+                    <span id="customAspectText">Stretch</span>
+                </button>
 
                 <div class="cmd-divider"></div>
 
@@ -385,89 +380,44 @@
     <script>
         document.addEventListener('DOMContentLoaded', () => {
             const player = document.querySelector('media-player');
-            const provider = document.querySelector('media-provider');
-            const indicator = document.getElementById('gestureIndicator');
-            const indicatorIcon = indicator.querySelector('.gi-icon');
-            const indicatorText = indicator.querySelector('.gi-text');
 
-            let startY = 0;
-            let startX = 0;
-            let initialVolume = 1;
-            let initialBrightness = 1;
-            let activeGesture = null;
-            let hideTimeout;
+            // --- Mute Toggle Logic ---
+            const muteBtn = document.getElementById('customMuteBtn');
+            const muteIconPath = document.getElementById('muteIconPath');
+            const muteText = document.getElementById('customMuteText');
+            
+            const volOnSvg = "M3 9v6h4l5 5V4L7 9H3zm13.5 3c0-1.77-1.02-3.29-2.5-4.03v8.05c1.48-.73 2.5-2.25 2.5-4.02zM14 3.23v2.06c2.89.86 5 3.54 5 6.71s-2.11 5.85-5 6.71v2.06c4.01-.91 7-4.49 7-8.77s-2.99-7.86-7-8.77z";
+            const volOffSvg = "M16.5 12c0-1.77-1.02-3.29-2.5-4.03v2.21l2.45 2.45c.03-.2.05-.41.05-.63zm2.5 0c0 .94-.2 1.82-.54 2.64l1.51 1.51C20.63 14.91 21 13.5 21 12c0-4.28-2.99-7.86-7-8.77v2.06c2.89.86 5 3.54 5 6.71zM4.27 3L3 4.27 7.73 9H3v6h4l5 5v-6.73l4.25 4.25c-.67.52-1.42.93-2.25 1.18v2.06c1.38-.31 2.63-.95 3.69-1.81L19.73 21 21 19.73l-9-9L4.27 3zM12 4L9.91 6.09 12 8.18V4z";
 
-            // SVG Icons for the popup
-            const volIcon = `<svg viewBox="0 0 24 24"><path d="M3 9v6h4l5 5V4L7 9H3zm13.5 3c0-1.77-1.02-3.29-2.5-4.03v8.05c1.48-.73 2.5-2.25 2.5-4.02zM14 3.23v2.06c2.89.86 5 3.54 5 6.71s-2.11 5.85-5 6.71v2.06c4.01-.91 7-4.49 7-8.77s-2.99-7.86-7-8.77z"/></svg>`;
-            const brightIcon = `<svg viewBox="0 0 24 24"><path d="M20 15.31L23.31 12 20 8.69V4h-4.69L12 .69 8.69 4H4v4.69L.69 12 4 15.31V20h4.69L12 23.31 15.31 20H20v-4.69zM12 18c-3.31 0-6-2.69-6-6s2.69-6 6-6 6 2.69 6 6-2.69 6-6 6z"/></svg>`;
-
-            const showIndicator = (type, value) => {
-                indicatorIcon.innerHTML = type === 'volume' ? volIcon : brightIcon;
-                indicatorText.innerText = value;
-                indicator.classList.add('active');
-                clearTimeout(hideTimeout);
-            };
-
-            const hideIndicator = () => {
-                hideTimeout = setTimeout(() => {
-                    indicator.classList.remove('active');
-                }, 800);
-            };
-
-            player.addEventListener('touchstart', (e) => {
-                if (e.touches.length > 1) return; // Ignore zooming or multi-touch
-                const touch = e.touches[0];
-                startX = touch.clientX;
-                startY = touch.clientY;
-                
-                const rect = player.getBoundingClientRect();
-                const xPercent = (startX - rect.left) / rect.width;
-
-                // Right side (>50%) = Volume, Left side (<50%) = Brightness
-                activeGesture = xPercent > 0.5 ? 'volume' : 'brightness';
-                initialVolume = player.volume;
-                
-                // Read current brightness from CSS filter, default to 1
-                const currentFilter = provider.style.filter || '';
-                const match = currentFilter.match(/brightness\(([^)]+)\)/);
-                initialBrightness = match ? parseFloat(match[1]) : 1;
-            }, { passive: true });
-
-            player.addEventListener('touchmove', (e) => {
-                if (!activeGesture) return;
-                const touch = e.touches[0];
-                const deltaY = startY - touch.clientY; 
-                const deltaX = startX - touch.clientX;
-
-                // Require a strictly vertical swipe to prevent interference with horizontal skipping
-                if (Math.abs(deltaY) > Math.abs(deltaX) + 5) {
-                    e.preventDefault(); // Stop the page itself from scrolling up and down
-                    const rect = player.getBoundingClientRect();
-                    
-                    // Moving half the screen's height equals a 100% change
-                    const change = deltaY / (rect.height / 2); 
-
-                    if (activeGesture === 'volume') {
-                        let newVol = Math.max(0, Math.min(1, initialVolume + change));
-                        player.volume = newVol;
-                        showIndicator('volume', Math.round(newVol * 100) + '%');
-                    } else if (activeGesture === 'brightness') {
-                        // Limit brightness between 10% and 100%
-                        let newBright = Math.max(0.1, Math.min(1, initialBrightness + change)); 
-                        provider.style.filter = `brightness(${newBright})`;
-                        showIndicator('brightness', Math.round(newBright * 100) + '%');
-                    }
-                }
-            }, { passive: false });
-
-            // Cleanup when finger leaves the screen
-            player.addEventListener('touchend', () => {
-                activeGesture = null;
-                hideIndicator();
+            muteBtn.addEventListener('click', () => {
+                player.muted = !player.muted;
             });
-            player.addEventListener('touchcancel', () => {
-                activeGesture = null;
-                hideIndicator();
+
+            // Listen to player state to update UI accurately (in case they use keyboard shortcut)
+            player.addEventListener('volume-change', (event) => {
+                if (event.detail.muted || event.detail.volume === 0) {
+                    muteIconPath.setAttribute('d', volOffSvg);
+                    muteText.innerText = "Unmute";
+                } else {
+                    muteIconPath.setAttribute('d', volOnSvg);
+                    muteText.innerText = "Mute";
+                }
+            });
+
+            // --- Aspect Ratio Logic ---
+            const aspectBtn = document.getElementById('customAspectBtn');
+            const aspectText = document.getElementById('customAspectText');
+            let isStretched = false;
+
+            aspectBtn.addEventListener('click', () => {
+                isStretched = !isStretched;
+                if (isStretched) {
+                    player.classList.add('stretched');
+                    aspectText.innerText = "Normal";
+                } else {
+                    player.classList.remove('stretched');
+                    aspectText.innerText = "Stretch";
+                }
             });
         });
     </script>
