@@ -1,7 +1,5 @@
-# Enhanced BY Gemini - by Surya
 # Thunder/server/stream_routes.py
 
-import asyncio
 import re
 import secrets
 import time
@@ -215,116 +213,120 @@ async def media_delivery(request: web.Request):
     try:
         path = request.match_info["path"]
         message_id, secure_hash = parse_media_request(path, request.query)
-    except (InvalidHash, FileNotFound) as e:
-        logger.debug(f"Client error: {type(e).__name__} - {e}", exc_info=True)
-        raise web.HTTPNotFound(text="Resource not found") from e
 
-    client_id, streamer = select_optimal_client()
-    work_loads[client_id] += 1
+        client_id, streamer = select_optimal_client()
 
-    try:
-        file_info = await streamer.get_file_info(message_id)
-        if not file_info.get('unique_id'):
-            raise FileNotFound("File unique ID not found in info.")
+        work_loads[client_id] += 1
 
-        if (file_info['unique_id'][:SECURE_HASH_LENGTH] != secure_hash):
-            raise InvalidHash("Provided hash does not match file's unique ID.")
+        try:
+            file_info = await streamer.get_file_info(message_id)
+            if not file_info.get('unique_id'):
+                raise FileNotFound("File unique ID not found in info.")
 
-        file_size = file_info.get('file_size', 0)
-        if file_size == 0:
-            raise FileNotFound("File size is reported as zero or unavailable.")
+            if (file_info['unique_id'][:SECURE_HASH_LENGTH] !=
+                    secure_hash):
+                raise InvalidHash(
+                    "Provided hash does not match file's unique ID.")
 
-        range_header = request.headers.get("Range", "")
-        start, end = parse_range_header(range_header, file_size)
-        content_length = end - start + 1
+            file_size = file_info.get('file_size', 0)
+            if file_size == 0:
+                raise FileNotFound(
+                    "File size is reported as zero or unavailable.")
 
-        if start == 0 and end == file_size - 1:
-            range_header = ""
+            range_header = request.headers.get("Range", "")
+            start, end = parse_range_header(range_header, file_size)
+            content_length = end - start + 1
 
-        mime_type = file_info.get('mime_type') or 'application/octet-stream'
+            if start == 0 and end == file_size - 1:
+                range_header = ""
 
-        filename = file_info.get('file_name')
-        if not filename:
-            ext = mime_type.split('/')[-1] if '/' in mime_type else 'bin'
-            ext_map = {'jpeg': 'jpg', 'mpeg': 'mp3', 'octet-stream': 'bin'}
-            ext = ext_map.get(ext, ext)
-            filename = f"file_{secrets.token_hex(4)}.{ext}"
+            mime_type = (
+                file_info.get('mime_type') or 'application/octet-stream')
 
-        disposition = get_content_disposition(request)
+            filename = file_info.get('file_name')
+            if not filename:
+                ext = mime_type.split('/')[-1] if '/' in mime_type else 'bin'
+                ext_map = {'jpeg': 'jpg', 'mpeg': 'mp3', 'octet-stream': 'bin'}
+                ext = ext_map.get(ext, ext)
+                filename = f"file_{secrets.token_hex(4)}.{ext}"
 
-        headers = {
-            "Content-Type": mime_type,
-            "Content-Length": str(content_length),
-            "Content-Disposition": f"{disposition}; filename*=UTF-8''{quote(filename)}",
-            "Accept-Ranges": "bytes",
-            "Cache-Control": "public, max-age=31536000",
-            "Connection": "keep-alive",
-            "Access-Control-Allow-Origin": "*",
-            "Access-Control-Allow-Headers": "Range, Content-Type, *",
-            "Access-Control-Expose-Headers": "Content-Length, Content-Range, Content-Disposition",
-            "X-Content-Type-Options": "nosniff"
-        }
+            disposition = get_content_disposition(request)
 
-        if range_header:
-            headers["Content-Range"] = f"bytes {start}-{end}/{file_size}"
+            headers = {
+                "Content-Type": mime_type,
+                "Content-Length": str(content_length),
+                "Content-Disposition": (
+                    f"{disposition}; filename*=UTF-8''{quote(filename)}"),
+                "Accept-Ranges": "bytes",
+                "Cache-Control": "public, max-age=31536000",
+                "Connection": "keep-alive",
+                "Access-Control-Allow-Origin": "*",
+                "Access-Control-Allow-Headers": "Range, Content-Type, *",
+                "Access-Control-Expose-Headers": (
+                    "Content-Length, Content-Range, Content-Disposition"),
+                "X-Content-Type-Options": "nosniff"
+            }
 
-        if request.method == 'HEAD':
+            if range_header:
+                headers["Content-Range"] = f"bytes {start}-{end}/{file_size}"
+
+            if request.method == 'HEAD':
+                work_loads[client_id] -= 1
+                return web.Response(
+                    status=206 if range_header else 200,
+                    headers=headers
+                )
+
+            async def stream_generator():
+                try:
+                    bytes_sent = 0
+                    bytes_to_skip = start % CHUNK_SIZE
+
+                    async for chunk in streamer.stream_file(
+                            message_id, offset=start, limit=content_length):
+                        if bytes_to_skip > 0:
+                            if len(chunk) <= bytes_to_skip:
+                                bytes_to_skip -= len(chunk)
+                                continue
+                            chunk = chunk[bytes_to_skip:]
+                            bytes_to_skip = 0
+
+                        remaining = content_length - bytes_sent
+                        if len(chunk) > remaining:
+                            chunk = chunk[:remaining]
+
+                        if chunk:
+                            yield chunk
+                            bytes_sent += len(chunk)
+
+                        if bytes_sent >= content_length:
+                            break
+                finally:
+                    work_loads[client_id] -= 1
+
             return web.Response(
                 status=206 if range_header else 200,
+                body=stream_generator(),
                 headers=headers
             )
 
-        response = web.StreamResponse(
-            status=206 if range_header else 200,
-            headers=headers
-        )
-        await response.prepare(request)
+        except (FileNotFound, InvalidHash):
+            work_loads[client_id] -= 1
+            raise
+        except Exception as e:
+            work_loads[client_id] -= 1
+            error_id = secrets.token_hex(6)
+            logger.error(
+                f"Stream error {error_id}: {e}",
+                exc_info=True)
+            raise web.HTTPInternalServerError(
+                text=f"Server error during streaming: {error_id}") from e
 
-        bytes_sent = 0
-        bytes_to_skip = start % CHUNK_SIZE
-
-        async for chunk in streamer.stream_file(
-                message_id, offset=start, limit=content_length):
-            if bytes_to_skip > 0:
-                if len(chunk) <= bytes_to_skip:
-                    bytes_to_skip -= len(chunk)
-                    continue
-                chunk = chunk[bytes_to_skip:]
-                bytes_to_skip = 0
-
-            remaining = content_length - bytes_sent
-            if len(chunk) > remaining:
-                chunk = chunk[:remaining]
-
-            if chunk:
-                await response.write(chunk)
-                bytes_sent += len(chunk)
-
-            if bytes_sent >= content_length:
-                break
-
-        return response
-
-    except (ConnectionResetError, ConnectionError, ConnectionAbortedError):
-        # NORMAL BEHAVIOR: MPV/VLC intentionally dropped the connection to skip forward.
-        # We silently exit without crashing the server.
-        logger.debug(f"Client gracefully disconnected while streaming {message_id}")
-        return response
-    except asyncio.CancelledError:
-        # Aiohttp cancelled the request (often happens when skipping)
-        logger.debug(f"Request cancelled by client for {message_id}")
-        raise
-    except (FileNotFound, InvalidHash) as e:
-        logger.debug(f"Stream validation failed: {e}")
+    except (InvalidHash, FileNotFound) as e:
+        logger.debug(f"Client error: {type(e).__name__} - {e}", exc_info=True)
         raise web.HTTPNotFound(text="Resource not found") from e
     except Exception as e:
         error_id = secrets.token_hex(6)
-        logger.error(f"Stream error {error_id}: {e}", exc_info=True)
-        # If headers are already sent, we can't send a 500 error page, just terminate
-        if 'response' in locals() and response.prepared:
-            return response
-        raise web.HTTPInternalServerError(text=f"Server error during streaming: {error_id}") from e
-    finally:
-        # We placed this here so it strictly runs exactly ONCE, no matter how the player disconnects,
-        # ensuring your server's workload limits never break.
-        work_loads[client_id] -= 1
+        logger.error(f"Server error {error_id}: {e}", exc_info=True)
+        raise web.HTTPInternalServerError(
+            text=f"An unexpected server error occurred: {error_id}") from e
