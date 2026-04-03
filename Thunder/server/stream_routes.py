@@ -277,38 +277,41 @@ async def media_delivery(request: web.Request):
                     headers=headers
                 )
 
-            async def stream_generator():
-                try:
-                    bytes_sent = 0
-                    bytes_to_skip = start % CHUNK_SIZE
-
-                    async for chunk in streamer.stream_file(
-                            message_id, offset=start, limit=content_length):
-                        if bytes_to_skip > 0:
-                            if len(chunk) <= bytes_to_skip:
-                                bytes_to_skip -= len(chunk)
-                                continue
-                            chunk = chunk[bytes_to_skip:]
-                            bytes_to_skip = 0
-
-                        remaining = content_length - bytes_sent
-                        if len(chunk) > remaining:
-                            chunk = chunk[:remaining]
-
-                        if chunk:
-                            yield chunk
-                            bytes_sent += len(chunk)
-
-                        if bytes_sent >= content_length:
-                            break
-                finally:
-                    work_loads[client_id] -= 1
-
-            return web.Response(
+            # --- UPDATED STREAMING LOGIC ---
+            response = web.StreamResponse(
                 status=206 if range_header else 200,
-                body=stream_generator(),
                 headers=headers
             )
+            await response.prepare(request)
+
+            try:
+                bytes_sent = 0
+                bytes_to_skip = start % CHUNK_SIZE
+
+                async for chunk in streamer.stream_file(
+                        message_id, offset=start, limit=content_length):
+                    if bytes_to_skip > 0:
+                        if len(chunk) <= bytes_to_skip:
+                            bytes_to_skip -= len(chunk)
+                            continue
+                        chunk = chunk[bytes_to_skip:]
+                        bytes_to_skip = 0
+
+                    remaining = content_length - bytes_sent
+                    if len(chunk) > remaining:
+                        chunk = chunk[:remaining]
+
+                    if chunk:
+                        await response.write(chunk)
+                        bytes_sent += len(chunk)
+
+                    if bytes_sent >= content_length:
+                        break
+            finally:
+                work_loads[client_id] -= 1
+
+            return response
+            # -------------------------------
 
         except (FileNotFound, InvalidHash):
             work_loads[client_id] -= 1
