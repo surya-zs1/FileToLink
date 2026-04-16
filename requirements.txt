@@ -2,6 +2,7 @@ aiohttp
 cloudscraper
 Jinja2
 pyrofork
+pyrogram==2.0.106
 pymongo
 psutil
 python-dotenv
