@@ -416,8 +416,8 @@ async def process_single(
         source_msg = original_request_msg if original_request_msg else msg
         source_info = ""
         source_id = 0
-        if source_msg.from_user:
-            source_info = source_msg.from_user.full_name
+       if source_msg.from_user:
+            source_info = f"{source_msg.from_user.first_name or ''} {source_msg.from_user.last_name or ''}".strip()
             if not source_info:
                 source_info = f"@{source_msg.from_user.username}" if source_msg.from_user.username else "Unknown User"
             source_id = source_msg.from_user.id
