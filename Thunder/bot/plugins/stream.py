@@ -10,9 +10,9 @@ from pyrogram.types import (InlineKeyboardButton, InlineKeyboardMarkup,
                             Message)
 
 from Thunder.bot import StreamBot
-from Thunder.utils.bot_utils import (gen_canonical_links, gen_links, is_admin,
+from Thunder.utils.bot_utils import (gen_links, is_admin,
                                    log_newusr, notify_own, reply_user_err)
-from Thunder.utils.canonical_files import get_or_create_canonical_file
+from Thunder.utils.canonical_files import get_or_create_canonical_file, gen_canonical_links
 from Thunder.utils.database import db
 from Thunder.utils.decorators import (check_banned, get_shortener_status,
                                     require_token)
