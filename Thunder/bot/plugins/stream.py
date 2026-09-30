@@ -12,7 +12,6 @@ from pyrogram.types import (InlineKeyboardButton, InlineKeyboardMarkup,
 from Thunder.bot import StreamBot
 from Thunder.utils.bot_utils import (gen_links, is_admin,
                                    log_newusr, notify_own, reply_user_err)
-from Thunder.utils.canonical_files import get_or_create_canonical_file, gen_canonical_links
 from Thunder.utils.database import db
 from Thunder.utils.decorators import (check_banned, get_shortener_status,
                                     require_token)
@@ -341,27 +340,12 @@ async def channel_receive_handler(bot: Client, msg: Message):
 
         try:
             shortener_val = await get_shortener_status(client, message)
-            canonical_record, stored_msg, reused_existing = await get_or_create_canonical_file(message, fwd_media)
-            if reused_existing and stored_msg:
-                await safe_delete_message(stored_msg)
-                stored_msg = None
-            if canonical_record:
-                links = await gen_canonical_links(
-                    file_name=canonical_record["file_name"],
-                    file_size=int(canonical_record.get("file_size", 0) or 0),
-                    public_hash=canonical_record["public_hash"],
-                    shortener=shortener_val
-                )
-                reply_to_message_id = int(canonical_record["canonical_message_id"])
-            else:
-                if not stored_msg:
-                    stored_msg = await fwd_media(message)
-                    if not stored_msg:
-                        logger.error(
-                            f"Failed to forward media from channel {message.chat.id}. Ignoring.")
-                        return
-                links = await gen_links(stored_msg, shortener=shortener_val)
-                reply_to_message_id = stored_msg.id
+            stored_msg = await fwd_media(message)
+            if not stored_msg:
+                logger.error(f"Failed to forward media from channel {message.chat.id}. Ignoring.")
+                return
+            links = await gen_links(stored_msg, shortener=shortener_val)
+            reply_to_message_id = stored_msg.id
             source_info = message.chat.title or "Unknown Channel"
 
             if notification_msg:
@@ -444,26 +428,13 @@ async def process_single(
     notification_msg: Optional[Message] = None
 ):
     try:
-        canonical_record, stored_msg, reused_existing = await get_or_create_canonical_file(file_msg, fwd_media)
-        if reused_existing and stored_msg:
-            await safe_delete_message(stored_msg)
-            stored_msg = None
-        if canonical_record:
-            links = await gen_canonical_links(
-                file_name=canonical_record["file_name"],
-                file_size=int(canonical_record.get("file_size", 0) or 0),
-                public_hash=canonical_record["public_hash"],
-                shortener=shortener_val
-            )
-            canonical_reply_id = int(canonical_record["canonical_message_id"])
-        else:
-            if not stored_msg:
-                stored_msg = await fwd_media(file_msg)
-                if not stored_msg:
-                    logger.error(f"Failed to forward media for message {file_msg.id}. Skipping.")
-                    return None
-            links = await gen_links(stored_msg, shortener=shortener_val)
-            canonical_reply_id = stored_msg.id
+        stored_msg = await fwd_media(file_msg)
+        if not stored_msg:
+            logger.error(f"Failed to forward media for message {file_msg.id}. Skipping.")
+            return None
+        links = await gen_links(stored_msg, shortener=shortener_val)
+        canonical_reply_id = stored_msg.id
+
         if notification_msg:
             result = await safe_edit_message(
                 notification_msg,
