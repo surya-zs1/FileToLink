@@ -145,6 +145,13 @@ async def is_admin(cli: Client, chat_id_val: int) -> bool:
     return member.status in [ChatMemberStatus.ADMINISTRATOR, ChatMemberStatus.OWNER]
 
 
+# --- Database-backed persistent administrative verification check ---
+async def check_is_admin(user_id: int) -> bool:
+    """Checks if a user is an admin or owner using persistent MongoDB storage."""
+    return await db.is_admin_persistent(user_id)
+# ------------------------------------------------------------------
+
+
 async def reply(msg: Message, **kwargs):
     try:
         return await msg.reply_text(**kwargs, quote=True, disable_web_page_preview=True)
