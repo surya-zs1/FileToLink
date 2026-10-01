@@ -39,7 +39,8 @@ class Database:
         try:
             return {
                 'id': user_id,
-                'join_date': datetime.datetime.utcnow()
+                'join_date': datetime.datetime.utcnow(),
+                'is_admin': False
             }
         except Exception as e:
             logger.error(f"Error in new_user for user {user_id}: {e}", exc_info=True)
@@ -53,7 +54,6 @@ class Database:
         except Exception as e:
             logger.error(f"Error in add_user for user {user_id}: {e}", exc_info=True)
             raise
-
 
     async def is_user_exist(self, user_id: int) -> bool:
         try:
@@ -115,6 +115,55 @@ class Database:
             logger.error(f"Error in delete_user for user {user_id}: {e}", exc_info=True)
             raise
 
+    # --- Persistent Admin Management Functions ---
+    async def add_admin(self, user_id: int):
+        try:
+            await self.col.update_one(
+                {"id": user_id},
+                {"$set": {"is_admin": True}},
+                upsert=True
+            )
+            await self.authorized_users_col.update_one(
+                {"user_id": user_id},
+                {"$set": {"user_id": user_id, "added_at": datetime.datetime.utcnow()}},
+                upsert=True
+            )
+            logger.debug(f"User {user_id} promoted to admin in MongoDB.")
+        except Exception as e:
+            logger.error(f"Error in add_admin for user {user_id}: {e}", exc_info=True)
+            raise
+
+    async def remove_admin(self, user_id: int):
+        try:
+            await self.col.update_one(
+                {"id": user_id},
+                {"$set": {"is_admin": False}}
+            )
+            logger.debug(f"Admin privileges revoked for user {user_id} in MongoDB.")
+        except Exception as e:
+            logger.error(f"Error in remove_admin for user {user_id}: {e}", exc_info=True)
+            raise
+
+    async def is_admin_persistent(self, user_id: int) -> bool:
+        try:
+            o_ids = Var.OWNER_ID if isinstance(Var.OWNER_ID, (list, tuple, set)) else [Var.OWNER_ID]
+            default_admins = getattr(Var, "ADMINS", [])
+            if isinstance(default_admins, str):
+                default_admins = [int(x) for x in default_admins.split() if x.isdigit()]
+
+            if user_id in o_ids or user_id in default_admins:
+                return True
+
+            user = await self.col.find_one({"id": user_id}, {"is_admin": 1})
+            if user and user.get("is_admin", False):
+                return True
+
+            auth_check = await self.authorized_users_col.find_one({"user_id": user_id})
+            return bool(auth_check)
+        except Exception as e:
+            logger.error(f"Error checking admin status for {user_id}: {e}", exc_info=True)
+            return False
+    # ---------------------------------------------
 
     async def add_banned_user(
         self, user_id: int, banned_by: Optional[int] = None,
@@ -210,7 +259,6 @@ class Database:
         except Exception as e:
             logger.error(f"Error saving main token for user {user_id}: {e}", exc_info=True)
             raise
-
 
     async def add_restart_message(self, message_id: int, chat_id: int) -> None:
         try:
